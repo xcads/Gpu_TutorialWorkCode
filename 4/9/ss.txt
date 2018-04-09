@@ -1,0 +1,276 @@
+struct Vertex *TestingLine(struct Pair pairsG[], struct Pair pairsH[],
+                 struct Line I1[], struct Line I2[],
+                 int numG, int numH, int numDot,
+                 double *leftBound, double *rightBound)
+{
+    /*
+    for (int i = 0; i < numG; i++) {
+        cout << "Line " << i << " : " << I1[i].beingUsed << endl;
+    }*/
+
+    // Randomly choose a point
+    //cout << "Testing Line" << endl;
+    int index = (numDot == 0) ? 0 : (getRandomInt(&randomSeed, numDot));
+    
+    //printf("%d %d\n", index, numDot);
+    
+    if (numDot == 0) {
+        int onlyOne = 0;
+        bool isFeasible = false;
+        struct Vertex *vSln = (struct Vertex *)malloc(sizeof(struct Vertex));
+        vSln->y = -FLT_MAX;
+        for (onlyOne = 0; onlyOne < numG; onlyOne++) {
+            if (I1[onlyOne].beingUsed == true) {
+                isFeasible = true;
+                break;
+            }
+        }
+        if (isFeasible == true && numH != 0) {
+            struct Vertex *vTemp = (struct Vertex *)malloc(sizeof(struct Vertex));
+            for (int i = 0; i < numH; i++) {
+                Intersection(&(I1[onlyOne]), &(I2[i]), vTemp);
+                if (vSln->y < vTemp->y) {
+                    vSln->x = vTemp->x;
+                    vSln->y = vTemp->y;
+                }
+            }
+            printf("sln: %lf %lf\n", vSln->x, vSln->y);
+            return vSln;
+        }
+        else {
+            /*
+            for (int i = 0; i < numG; i++) {
+                cout << "beingUsed: " << I1[i].beingUsed << endl;
+            }*/
+            cout << "No solution!\n";
+            exit(0);
+        }
+    }
+    
+        //int index = round ? 1 : 0;
+    double xPrimeG = pairsG[index].point.x;   // x' - xPrime
+    double yPrimeG = pairsG[index].point.y;
+    double yPrimeH;
+
+    //cout << xPrimeG << '\n';
+
+    // struct Line *sg = (&pairsG[index].line1.a1 < &pairsG[index].line2.a1) ? &pairsG[index].line1 : &pairsG[index].line2;
+    // struct Line *Sg = (&pairsG[index].line1.a1 >= &pairsG[index].line2.a1) ? &pairsG[index].line1 : &pairsG[index].line2;
+    struct Line *sg = NULL;
+    struct Line *Sg = NULL;
+    struct Line *sh = NULL;
+    struct Line *Sh = NULL;
+    // struct Line *sh = (&pairsH[index].line1.a1 < &pairsH[index].line2.a1) ? &pairsH[index].line1 : &pairsH[index].line2;
+    // struct Line *Sh = (&pairsH[index].line1.a1 < &pairsH[index].line2.a1) ? &pairsH[index].line1 : &pairsH[index].line2;
+
+    vector<int> linesG;
+    vector<int> linesH;
+
+    // Finding g(x') and H(x')
+    for (int i = 0; i < numG; i++) {
+        if (I1[i].beingUsed == true) {
+            if ((abs(yPrimeG - (I1[i].a1 * xPrimeG + I1[i].b)) > EQUAL_NUM && yPrimeG < (I1[i].a1 * xPrimeG + I1[i].b)) || (sg == NULL || Sg == NULL)) {
+                //printf("xPrime yPrime ???: %lf %lf %lf\n", xPrimeG, yPrimeG, (I1[i].a1 * xPrimeG + I1[i].b));
+                
+                
+                
+                yPrimeG = I1[i].a1 * xPrimeG + I1[i].b;
+                sg = &I1[i];
+                Sg = &I1[i];
+            }
+        }
+    }
+    for (int i = 0; i < numH; i++) {
+        if (I2[i].beingUsed == true) {
+            if (sh == NULL || Sh == NULL) {
+                sh = &I2[i];
+                Sh = &I2[i];
+                yPrimeH = I2[i].a1 * xPrimeG + I2[i].b;
+            }
+            else if (abs(yPrimeH - (I2[i].a1 * xPrimeG + I2[i].b)) > EQUAL_NUM && yPrimeH > (I2[i].a1 * xPrimeG + I2[i].b)) {
+                yPrimeH = I2[i].a1 * xPrimeG + I2[i].b;
+                sh = &I2[i];
+                Sh = &I2[i];
+            }
+        }
+    }
+    if (numH == 0) {
+        yPrimeH = yPrimeG + 1000.0;
+    }
+
+    // Finding sg - min g(x') && Finding Sg - max g(x')
+    /*
+    struct Line *sg = &pairsG[0].line1;
+    struct Line *Sg = &pairsG[0].line1;
+    struct Line *sh = &pairsH[0].line1;
+    struct Line *Sh = &pairsH[0].line1;
+    */
+    for (int i = 0; i < numG; i++) {
+        double currentLineValueG = I1[i].a1 * xPrimeG + I1[i].b;
+        if (I1[i].beingUsed == false || abs(currentLineValueG - yPrimeG) >= EQUAL_NUM) {
+            continue;
+        }
+        
+        if (I1[i].a1 < sg->a1) {
+            sg = &I1[i];
+        }
+        if (I1[i].a1 > Sg->a1) {
+            Sg = &I1[i];
+        }
+    }
+    // Finding sh - min h(x') && Finding Sh - max h(x')
+    for (int i = 0; i < numH; i++) {
+        double currentLineValueH = I2[i].a1 * xPrimeG + I2[i].b;
+        if (I2[i].beingUsed == false || abs(currentLineValueH - yPrimeH) >= EQUAL_NUM) {
+            continue;
+        }
+
+        if (I2[i].a1 < sh->a1) {
+            sh = &I2[i];
+        }
+        if (I2[i].a1 > Sh->a1) {
+            Sh = &I2[i];
+        }
+    }
+    
+    // Is feasible
+    if (abs(yPrimeG - yPrimeH) < 1e-6) {
+        if (sg->a1 > 0 && sg->a1 >= Sh->a1) {
+            // x* < x'
+            if (sh != Sh) {
+                sh->beingUsed = false;
+            }
+            if (sg != Sg) {
+                Sg->beingUsed = false;
+            }
+            *rightBound = xPrimeG;
+            //cout << "cccccccccc\n";
+            return NULL;
+        }
+        else if (Sg->a1 < 0 && Sg->a1 <= sh->a1) {
+            // x* > x'
+            if (sh != Sh) {
+                Sh->beingUsed = false;
+            }
+            if (sg != Sg) {
+                sg->beingUsed = false;
+            }
+            *leftBound = xPrimeG;
+            //cout << "dddddddddddddd\n";
+            return NULL;
+        }
+        else {
+            // x* = x'
+            Solution.x = xPrimeG;
+            Solution.y = yPrimeG;
+            //cout << "gggggggggggggggggg\n";
+            return &(Solution);
+        }
+    }
+    else if (yPrimeG > yPrimeH) {   // infeasible
+        if (sg->a1 > Sh->a1) {
+            // x* < x'
+            if (sh != Sh) {
+                sh->beingUsed = false;
+            }
+            if (sg != Sg) {
+                Sg->beingUsed = false;
+            }
+            
+            else {
+                if (pairsG[index].line1.a1 < pairsG[index].line2.a1) {
+                    //pairsG[index].line2.beingUsed = false;
+                    I1[pairsG[index].index2].beingUsed = false;
+                }
+                else if (pairsG[index].line1.a1 > pairsG[index].line2.a1) {
+                    //pairsG[index].line1.beingUsed = false;
+                    I1[pairsG[index].index1].beingUsed = false;
+                }
+            }
+            *rightBound = xPrimeG;
+            /*
+            printf("aaaaaaaaaaa %lf %lf %lf\n", xPrimeG, yPrimeG, yPrimeH);
+            cout << sh->a1 << " " << sh->a1 * xPrimeG + sh->b << " " << originalConstraints[sh->index].a1 << '\n';
+            cout << Sh->a1 << " " << Sh->a1 * xPrimeG + Sh->b << " " << originalConstraints[Sh->index].a1 << '\n';
+            */
+            return NULL;
+        }
+        else if (Sg->a1 < sh->a1) {
+            // x* > x'
+            if (sh != Sh) {
+                Sh->beingUsed = false;
+            }
+            if (sg != Sg) {
+                sg->beingUsed = false;
+            }
+            
+            else {
+                if (pairsG[index].line1.a1 < pairsG[index].line2.a1) {
+                    //pairsG[index].line1.beingUsed = false;
+                    I1[pairsG[index].index1].beingUsed = false;
+                }
+                else if (pairsG[index].line1.a1 > pairsG[index].line2.a1) {
+                    //pairsG[index].line2.beingUsed = false;
+                    I1[pairsG[index].index2].beingUsed = false;
+                }
+            }
+            *leftBound = xPrimeG;
+            //printf("bbbbbbbbbbbbbbb\n");
+            return NULL;
+        }
+        else if ((sg->a1 - Sh->a1) <= 0 && 0 <= (Sg->a1 - sh->a1)) {
+            // no feasible
+            printf("No feasible solution!\n");
+            exit(0);
+            return NULL;
+        }
+    }
+    else if (yPrimeG < yPrimeH) {   // feasible
+        if (sg->a1 > 0) {
+            // x* < x'
+            if (sg != Sg) {
+                Sg->beingUsed = false;
+            }
+            else {
+                if (pairsG[index].line1.a1 < pairsG[index].line2.a1) {
+                    //pairsG[index].line2.beingUsed = false;
+                    I1[pairsG[index].index2].beingUsed = false;
+                }
+                else if (pairsG[index].line1.a1 > pairsG[index].line2.a1) {
+                    //pairsG[index].line1.beingUsed = false;
+                    I1[pairsG[index].index1].beingUsed = false;
+                }
+            }
+            *rightBound = xPrimeG;
+            //cout << "eeeeeeeeeeeeeeeee\n";
+            return NULL;
+        }
+        else if (Sg->a1 < 0) {
+            // x* > x'
+            if (sg != Sg) {
+                sg->beingUsed = false;
+            }
+            else {
+                if (pairsG[index].line1.a1 < pairsG[index].line2.a1) {
+                    //pairsG[index].line1.beingUsed = false;
+                    I1[pairsG[index].index1].beingUsed = false;
+                }
+                else if (pairsG[index].line1.a1 > pairsG[index].line2.a1) {
+                    //pairsG[index].line2.beingUsed = false;
+                    I1[pairsG[index].index2].beingUsed = false;
+                }
+            }
+            *leftBound = xPrimeG;
+            //cout << "fffffffffffff\n";
+            return NULL;
+        }
+        else if (sg->a1 <= 0 && 0 <= Sg->a1) {
+            // x* = x'
+            Solution.x = xPrimeG;
+            Solution.y = yPrimeG;
+            //cout << "hhhhhhhhhhhhhh\n";
+            return &(Solution);
+        }
+    }
+    return NULL;
+}
