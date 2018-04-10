@@ -1,0 +1,740 @@
+#define _CRT_NO_WARNING_
+
+#include "cuda.h"
+#include "host_defines.h"
+#include "cuda_runtime.h"
+#include "device_launch_parameters.h"
+#include "struct_rotation.h"
+#include "book.h"
+#include "Header.h"
+
+#include <thrust/copy.h>
+#include <thrust/device_ptr.h>
+#include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
+#include <thrust/sequence.h>
+#include <thrust/partition.h>
+#include <thrust/scan.h>
+#include <thrust/remove.h>
+#include <thrust/extrema.h>
+#include <thrust/unique.h>
+#include <thrust/system/cuda/execution_policy.h>
+#include <thrust/iterator/reverse_iterator.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <iostream>
+#include <math.h>
+#include <algorithm>
+#include <vector>
+#include <time.h>
+#include <string.h>
+#include <limits.h>	
+#include <float.h>
+
+using namespace std;
+
+#define numberOfLines1 10000
+#define block_width 512
+vector<struct Line> originalConstraints;
+
+int judgeFeasible(
+	thrust::device_vector<double> &t_marker,
+	thrust::device_vector<int> &t_active,
+	int numberofelements,
+	double leftBound,
+	double rightBound,
+	double *sg,
+	double *Sg
+)
+{
+	thrust::counting_iterator<int> first(0);
+	thrust::counting_iterator<int> last = first + numberofelements;
+
+	t_active.resize(numberofelements);
+
+	t_active.erase(
+		thrust::copy_if(
+			first,
+			last,
+			t_marker.begin(),
+			t_active.begin(),
+			is_feasible()),
+		t_active.end());
+
+	return t_active.size();
+}
+
+int seprationG(
+	thrust::device_vector<double> &t_marker,
+	thrust::device_vector<int> &t_active,
+	int numberofelements
+)
+{
+	thrust::counting_iterator<int> first(0);
+	thrust::counting_iterator<int> last = first + numberofelements;
+
+	t_active.resize(numberofelements);
+
+	t_active.erase(
+		thrust::copy_if(
+			first,
+			last,
+			t_marker.begin(),
+			t_active.begin(),
+			is_positive()),
+		t_active.end());
+
+	return t_active.size();
+}
+
+int seprationH(
+	thrust::device_vector<double> &t_marker,
+	thrust::device_vector<int> &t_active,
+	int numberofelements
+)
+{
+	thrust::counting_iterator<int> first(0);
+	thrust::counting_iterator<int> last = first + numberofelements;
+
+	t_active.resize(numberofelements);
+
+	t_active.erase(
+		thrust::copy_if(
+			first,
+			last,
+			t_marker.begin(),
+			t_active.begin(),
+			is_negative()),
+		t_active.end());
+
+	return t_active.size();
+}
+
+int seprationZero(
+	thrust::device_vector<double> &t_marker,
+	thrust::device_vector<int> &t_active,
+	int numberofelements
+)
+{
+	thrust::counting_iterator<int> first(0);
+	thrust::counting_iterator<int> last = first + numberofelements;
+
+	t_active.resize(numberofelements);
+
+	t_active.erase(
+		thrust::copy_if(
+			first,
+			last,
+			t_marker.begin(),
+			t_active.begin(),
+			is_zero()),
+		t_active.end());
+
+	return t_active.size();
+}
+
+int seprationLinesG(
+	thrust::device_vector<double> &t_marker,
+	thrust::device_vector<int> &t_active,
+	int numberofelements
+)
+{
+	thrust::counting_iterator<int> first(0);
+	thrust::counting_iterator<int> last = first + numberofelements;
+
+	t_active.resize(numberofelements);
+
+	t_active.erase(
+		thrust::copy_if(
+			first,
+			last,
+			t_marker.begin(),
+			t_active.begin(),
+			is_zero()),
+		t_active.end());
+
+	return t_active.size();
+}
+
+int judgePrune(
+	thrust::device_vector<double> &t_marker,
+	thrust::device_vector<int> &t_active,
+	int numberofelements
+)
+{
+	thrust::counting_iterator<int> first(0);
+	thrust::counting_iterator<int> last = first + numberofelements;
+
+	t_active.resize(numberofelements);
+
+	t_active.erase(
+		thrust::copy_if(
+			first,
+			last,
+			t_marker.begin(),
+			t_active.begin(),
+			is_prune()),
+		t_active.end());
+
+	return t_active.size();
+}
+
+int findMaxElement(
+	thrust::device_vector<double> &t_marker,
+	thrust::device_vector<double> &t_active,
+	double maxelement
+)
+{
+	t_active.begin() = thrust::max_element(t_marker.begin(), t_marker.end());
+
+	return t_marker.size();
+}
+
+int findMinElement(
+	thrust::device_vector<double> &t_marker
+
+)
+{
+	thrust::min_element(t_marker.begin(), t_marker.end());
+
+	return t_marker.size();
+}
+
+double rotationAngle(struct Objfunc *object)
+{
+	double rotationAngle;
+
+	if (object->c2 == 0 && object->c1 > 0) {
+		rotationAngle = -PI / 2;
+	}
+	else if (object->c2 == 0 && object->c1 < 0) {
+		rotationAngle = PI / 2;
+	}
+	else {
+		rotationAngle = atan(-object->c1 / object->c2);
+	}
+
+	return rotationAngle;
+}
+//,double *arrayG,double  arrayH[]
+__global__ void rotation(
+	struct Line constraints[],
+	double  *lines1,
+	double  *lines2,
+	double  *lines3,
+	double  *lines_judge,
+	double rotationAngle,
+	int numberOfLines)
+{
+
+	double a1Temp, a2Temp, bTemp;
+	//thrust::device_vector<double>  lines1;
+	int x = threadIdx.x + blockIdx.x * blockDim.x;
+	//	thrust::device_vector<double> lines1;
+	if (x < (numberOfLines)) {
+		a1Temp = constraints[x].a1;
+		a2Temp = constraints[x].a2;
+		bTemp = constraints[x].b;
+
+		lines1[x] = (cos(rotationAngle) * a1Temp) + (sin(rotationAngle) * a2Temp);
+		lines2[x] = (cos(rotationAngle) * a2Temp) - (sin(rotationAngle) * a1Temp);
+		lines3[x] = bTemp;
+		lines_judge[x] = lines2[x];
+
+		lines1[x] = -lines1[x] / lines2[x];
+		lines3[x] = lines3[x] / lines2[x];
+		lines2[x] = 1;
+
+
+	}
+
+}
+
+__global__ void intersection
+(
+	double  *lines1,
+	double  *lines2,
+	double  *lines3,
+	double  *lines1g,
+	double  *lines2g,
+	double  *lines3g,
+	int     *arrayJudge,
+	double  *vertex_x,
+	double  *vertex_y,
+	int numberOfLines
+)
+{
+	int x = 2 * (threadIdx.x + blockIdx.x * blockDim.x);
+	int bid = threadIdx.x + blockIdx.x*blockDim.x;
+
+	if (x < numberOfLines)
+	{
+
+		vertex_x[bid] = (lines3[arrayJudge[x]] - lines3[arrayJudge[x + 1]]) / (lines1[arrayJudge[x]] - lines1[arrayJudge[x + 1]]);
+		vertex_y[bid] = (lines1[arrayJudge[x + 1]] * lines3[arrayJudge[x]] - lines1[arrayJudge[x]] * lines3[arrayJudge[x + 1]]) / (lines1[arrayJudge[x + 1]] - lines1[arrayJudge[x]]);
+		lines1g[bid] = lines1[arrayJudge[bid]];
+		lines2g[bid] = lines2[arrayJudge[bid]];
+		lines3g[bid] = lines3[arrayJudge[bid]];
+
+	}
+
+}
+
+__global__ void findSgvalue
+(
+	double *d_vertex_x,
+	double *lines3g,
+	double *lines1g,
+	double *Value,
+	int randomIndex,
+	int numberOfG
+)
+{
+	int bid = threadIdx.x + blockDim.x*blockIdx.x;
+	if (bid < numberOfG) {
+		Value[bid] = lines1g[bid] * d_vertex_x[randomIndex] + lines3g[bid];
+	}
+
+}
+__global__ void findFirstElement
+(
+	double *d_vertex_x,
+	double *lines3g,
+	double *lines1g,
+	double value,
+	double *a1Value,
+	int randomIndex,
+	int numberOfG
+)
+{
+	int bid = threadIdx.x + blockDim.x*blockIdx.x;
+	int x = 0;
+	if (bid < numberOfG) {
+		if (fabs(value- (lines1g[bid] * d_vertex_x[randomIndex]) - lines3g[bid])<1e-6)
+		{
+			a1Value[x] = lines1g[bid];
+			//	printf("%d\n", x);
+			x++;
+
+		}
+
+	}
+
+}
+
+int main()
+{
+	cudaEvent_t start, stop;
+	float elapsedTime = 0.0;
+	double leftBound, rightBound;
+	double aTemp, bTemp, cTemp;
+	struct Objfunc object;
+	double rotationAngleTemp;
+
+	FILE* fp;
+
+	int numberOfLines = 0;
+	printf("!!!!!");
+	fp = fopen("dataset1.txt", "r");
+
+	while (1) {
+		fscanf_s(fp, "%lf%lf%lf", &aTemp, &bTemp, &cTemp);
+		if (aTemp == 0.0 && bTemp == 0.0 && cTemp == 0.0) {
+			break;
+		}
+		//printf("@@@@");
+		struct Line lineTemp;
+		lineTemp.a1 = aTemp;
+		lineTemp.a2 = bTemp;
+		lineTemp.b = cTemp;
+		originalConstraints.push_back(lineTemp);
+		numberOfLines++;
+
+	}
+	object.c1 = 1;
+	object.c2 = 1;
+	thrust::host_vector<double>   lines1(numberOfLines);
+	thrust::device_vector<int>  arrayG1(numberOfLines);
+	thrust::device_vector<int>  arrayH1(numberOfLines);
+	thrust::device_vector<int>  arrayB1(numberOfLines);
+	//scanf( "%lf%lf", &object.c1, &object.c2);
+	//scanf( "%lf%lf", &leftBound, &rightBound);
+	leftBound = -10000;
+	rightBound = 10000;
+	rotationAngleTemp = atan(-object.c1 / object.c2);
+	//printf("%lf", rotationAngleTemp);
+	struct Line *d_constrainstans;
+
+	//	struct Objfunc *d_object;
+
+	//	int *d_numberOfLines;
+	//	double *d_rotationAngle;
+	double *d_arrayG;
+	double *d_arrayH;
+	int size = numberOfLines * sizeof(struct Line);
+	//	thrust::device_vector<int> d_lines(numberOfLines);
+
+	HANDLE_ERROR(cudaMalloc((void**)&d_constrainstans, size));
+
+
+	HANDLE_ERROR(cudaMalloc((void**)&d_arrayG, size));
+	HANDLE_ERROR(cudaMalloc((void**)&d_arrayH, size));
+
+	HANDLE_ERROR(cudaMemcpy(d_constrainstans, originalConstraints.data(), size, cudaMemcpyHostToDevice));
+
+	int numberOfBlocks = ceil((float)numberOfLines / block_width);
+	thrust::device_vector<double>   lines2;
+	thrust::device_vector<double>  d_lines1(numberOfLines);
+	thrust::device_vector<double>  d_lines2(numberOfLines);
+	thrust::device_vector<double>  d_lines3(numberOfLines);
+	thrust::device_vector<double>  d_lines_judge(numberOfLines);
+	thrust::device_vector<double>  d_vertex_x(numberOfLines);
+	thrust::device_vector<double>  d_vertex_y(numberOfLines);
+	thrust::device_vector<double>  d_lines1g(numberOfLines);
+	thrust::device_vector<double>  d_lines2g(numberOfLines);
+	thrust::device_vector<double>  d_lines3g(numberOfLines);
+	thrust::device_vector<double>  d_vertexh_x(numberOfLines);
+	thrust::device_vector<double>  d_vertexh_y(numberOfLines);
+	thrust::device_vector<double>  d_lines1h(numberOfLines);
+	thrust::device_vector<double>  d_lines2h(numberOfLines);
+	thrust::device_vector<double>  d_lines3h(numberOfLines);
+	//	thrust::device_vector<double>  d_Sg(numberOfLines);
+	//	thrust::device_vector<double>  d_sg(numberOfLines);
+
+	thrust::device_vector<double>  value(numberOfLines);
+	thrust::device_vector<double>  valueh(numberOfLines);
+	thrust::device_vector<double>  d_Sg(11);
+	thrust::device_vector<double>  d_sg(11);
+	thrust::device_vector<double>  d_Sh(11);
+	thrust::device_vector<double>  d_sh(11);
+	//	thrust::device_vector<double>  d_sh(11); 
+	//<< <numberOfBlocks, block_width >> >
+	rotation << <numberOfBlocks, block_width >> >
+		(d_constrainstans,
+			thrust::raw_pointer_cast(&d_lines1[0]),
+			thrust::raw_pointer_cast(&d_lines2[0]),
+			thrust::raw_pointer_cast(&d_lines3[0]),
+			thrust::raw_pointer_cast(&d_lines_judge[0]),
+			rotationAngleTemp,
+			numberOfLines);
+
+	
+
+	double optimalAnswer_x = NULL;
+	double optimalAnswer_y = NULL;
+
+	while (1) {;
+		int i = seprationG(d_lines_judge, arrayG1, numberOfLines);
+		//printf("SIZE:%d\n", arrayG1.size());
+		int m = seprationH(d_lines_judge, arrayH1, numberOfLines);
+
+		int sizeOfG = arrayG1.size();
+		int j = seprationZero(d_lines_judge, arrayB1, numberOfLines);
+
+		intersection << <numberOfBlocks, block_width >> > (
+			thrust::raw_pointer_cast(&d_lines1[0]),
+			thrust::raw_pointer_cast(&d_lines2[0]),
+			thrust::raw_pointer_cast(&d_lines3[0]),
+			thrust::raw_pointer_cast(&d_lines1g[0]),
+			thrust::raw_pointer_cast(&d_lines2g[0]),
+			thrust::raw_pointer_cast(&d_lines3g[0]),
+			thrust::raw_pointer_cast(&arrayG1[0]),
+			thrust::raw_pointer_cast(&d_vertex_x[0]),
+			thrust::raw_pointer_cast(&d_vertex_y[0]),
+			numberOfLines
+			);
+
+		intersection << <numberOfBlocks, block_width >> > (
+			thrust::raw_pointer_cast(&d_lines1[0]),
+			thrust::raw_pointer_cast(&d_lines2[0]),
+			thrust::raw_pointer_cast(&d_lines3[0]),
+			thrust::raw_pointer_cast(&d_lines1h[0]),
+			thrust::raw_pointer_cast(&d_lines2h[0]),
+			thrust::raw_pointer_cast(&d_lines3h[0]),
+			thrust::raw_pointer_cast(&arrayH1[0]),
+			thrust::raw_pointer_cast(&d_vertexh_x[0]),
+			thrust::raw_pointer_cast(&d_vertexh_y[0]),
+			numberOfLines
+			);
+		srand((unsigned)time(NULL));
+		int randomIndex = rand() % (sizeOfG / 2);
+
+		//	printf("randomIndex:%d\n", randomIndex);
+
+		printf("1111");
+
+		//find Sg sg Sh sh
+		findSgvalue << <numberOfBlocks, block_width >> > (
+			thrust::raw_pointer_cast(&d_vertex_x[0]),
+			thrust::raw_pointer_cast(&d_lines3g[0]),
+			thrust::raw_pointer_cast(&d_lines1g[0]),
+			thrust::raw_pointer_cast(&value[0]),
+			randomIndex,
+			arrayG1.size() / 2
+			);
+
+		findSgvalue << <numberOfBlocks, block_width >> > (
+			thrust::raw_pointer_cast(&d_vertex_x[0]),
+			thrust::raw_pointer_cast(&d_lines3h[0]),
+			thrust::raw_pointer_cast(&d_lines1h[0]),
+			thrust::raw_pointer_cast(&valueh[0]),
+			randomIndex,
+			arrayH1.size() / 2
+			);
+
+		thrust::device_vector<double>::iterator xprimeG_position = thrust::max_element(value.begin(), value.end());
+		unsigned int position = xprimeG_position - value.begin();
+		double xprimeG = value[position];
+		double Sg = d_lines1g[position];
+
+		printf("xprimeG:%lf\n", xprimeG);
+
+
+		thrust::device_vector<double>::iterator minimizeG_position = thrust::min_element(value.begin(), value.end());
+		unsigned int minimizeG_position1 = minimizeG_position - value.begin();
+		double xminimizeG = value[minimizeG_position1];
+		double sg = d_lines1g[minimizeG_position1];
+
+		printf("xminimizeG:%lf\n", xminimizeG);
+
+		thrust::device_vector<double>::iterator xprimeH_position = thrust::min_element(valueh.begin(), valueh.end());
+		unsigned int positionH = xprimeH_position - valueh.begin();
+		double xprimeH = valueh[positionH];
+		double sh = d_lines1h[positionH];
+
+		printf("positionH:%d\n", positionH);
+		printf("xprimeH:%lf\n", xprimeH);
+
+		thrust::device_vector<double>::iterator maxmizeH_position = thrust::max_element(valueh.begin(), valueh.end());
+		unsigned int maxmizeH_position1 = maxmizeH_position - valueh.begin();
+		double xmaxmizeH = valueh[maxmizeH_position1];
+		double Sh = d_lines1h[maxmizeH_position1];
+
+		printf("xmaxmizeH:%lf\n", xmaxmizeH);
+
+
+		if (fabs(xprimeG - xprimeH) < 0.00001) {
+			if (sg > 0 && sg >= Sh) {
+				// x* < x'
+				if (sh != Sh) {
+					sh = false;
+
+					printf("a\n");
+				}
+				if (sg != Sg) {
+					Sg = false;
+					printf("b\n");
+				}
+				rightBound = d_vertex_x[randomIndex];
+				//	judgePrune(d_lines1g, arrayG1, arrayG1.size());
+				printf("c\n");
+				return false;
+			}
+			else if (Sg < 0 && Sg <= sh) {
+				// x* > x'
+				if (sh != Sh) {
+					Sh = false;
+					printf("d\n");
+				}
+				if (sg != Sg) {
+					sg = false;
+					printf("e\n");
+				}
+				leftBound = d_vertex_x[randomIndex];
+				judgePrune(d_lines1g, arrayG1, arrayG1.size());
+				printf("f\n");
+				return false;
+			}
+			else {
+
+				optimalAnswer_x = d_vertex_x[randomIndex];
+				optimalAnswer_y = d_vertex_y[randomIndex];
+				printf("g\n");
+				printf("%lf %lf\n", optimalAnswer_x, optimalAnswer_y);
+
+				return true;
+			}
+		}
+		else if (xprimeG > xprimeH) {
+			if (sg > Sh) {
+				// x* < x'
+				if (sh != Sh) {
+					sh = false;
+					printf("h\n");
+				}
+				if (sg != Sg) {
+					Sg = false;
+					printf("i\n");
+				}
+
+				else {
+					if (randomIndex % 2 == 0) {
+						if (d_lines1g[randomIndex] < d_lines1g[randomIndex - 1]) {
+							d_lines1g[randomIndex - 1] = false;
+							printf("j\n");
+						}
+						else if (d_lines1g[randomIndex] > d_lines1g[randomIndex - 1]) {
+							d_lines1g[randomIndex] = false;
+							printf("k\n");
+						}
+						judgePrune(d_lines1g, arrayG1, arrayG1.size());
+						printf("l\n");
+					}
+					else {
+						if (d_lines1g[randomIndex + 1] < d_lines1g[randomIndex]) {
+							d_lines1g[randomIndex] = false;
+							printf("m\n");
+						}
+						else if (d_lines1g[randomIndex + 1] > d_lines1g[randomIndex]) {
+							d_lines1g[randomIndex + 1] = false;
+							printf("n\n");
+						}
+						judgePrune(d_lines1g, arrayG1, arrayG1.size());
+						printf("o\n");
+					}
+				}
+
+				rightBound = d_vertex_x[randomIndex];
+				judgePrune(d_lines1g, arrayG1, arrayG1.size());
+				optimalAnswer_x = d_vertex_x[randomIndex];;
+				optimalAnswer_y = d_vertex_y[randomIndex];;
+				printf("%lf %lf\n", optimalAnswer_x, optimalAnswer_y);
+				printf("p\n");
+
+				return false;
+			}
+			else if (Sg < sh) {
+				// x* > x'
+				if (sh != Sh) {
+					Sh = false;
+					printf("q\n");
+				}
+				if (sg != Sg) {
+					sg = false;
+					printf("r\n");
+				}
+
+				else {
+					if (randomIndex % 2 == 0) {
+						if (d_lines1g[randomIndex] < d_lines1g[randomIndex - 1]) {
+							d_lines1g[randomIndex] = false;
+							printf("s\n");
+						}
+						else if (d_lines1g[randomIndex] > d_lines1g[randomIndex - 1]) {
+							d_lines1g[randomIndex - 1] = false;
+							printf("t\n");
+						}
+						judgePrune(d_lines1g, arrayG1, arrayG1.size());
+						printf("u\n");
+					}
+					else {
+						if (d_lines1g[randomIndex + 1] < d_lines1g[randomIndex]) {
+							d_lines1g[randomIndex + 1] = false;
+							printf("v\n");
+						}
+						else if (d_lines1g[randomIndex + 1] > d_lines1g[randomIndex]) {
+							d_lines1g[randomIndex] = false;
+							printf("w\n");
+						}
+					}
+				}
+				leftBound = d_vertex_x[randomIndex];
+				judgePrune(d_lines1g, arrayG1, arrayG1.size());
+				printf("x\n");
+				return false;
+			}
+			else if ((sg - Sh) <= 0 && 0 <= (Sg - sh)) {
+				// no feasible
+				printf("No feasible Answer!\n");
+				exit(0);
+			}
+		}
+		else if (xprimeG < xprimeH) {
+			if (sg > 0) {
+				if (sg != Sg) {
+					Sg = false;
+					printf("y\n");
+				}
+				else {
+					if (randomIndex % 2 == 0) {
+						if (d_lines1g[randomIndex] < d_lines1g[randomIndex - 1]) {
+							d_lines1g[randomIndex - 1] = false;
+							printf("z\n");
+						}
+						else if (d_lines1g[randomIndex] > d_lines1g[randomIndex - 1]) {
+							d_lines1g[randomIndex] = false;
+							printf("aa\n");
+						}
+						judgePrune(d_lines1g, arrayG1, arrayG1.size());
+						printf("ab\n");
+					}
+					else {
+						if (d_lines1g[randomIndex + 1] < d_lines1g[randomIndex]) {
+							d_lines1g[randomIndex] = false;
+							printf("ac\n");
+						}
+						else if (d_lines1g[randomIndex + 1] > d_lines1g[randomIndex]) {
+							d_lines1g[randomIndex + 1] = false;
+							printf("ad\n");
+						}
+					}
+				}
+				rightBound = d_vertex_x[randomIndex];
+				judgePrune(d_lines1g, arrayG1, arrayG1.size());
+				printf("ae\n");
+				return false;
+			}
+			else if (Sg < 0) {
+				// x* > x'
+				if (sg != Sg) {
+					sg = false;
+					printf("af\n");
+				}
+				else {
+					if (randomIndex % 2 == 0) {
+						if (d_lines1g[randomIndex] < d_lines1g[randomIndex - 1]) {
+							d_lines1g[randomIndex] = false;
+							printf("ag\n");
+						}
+						else if (d_lines1g[randomIndex] > d_lines1g[randomIndex - 1]) {
+							d_lines1g[randomIndex - 1] = false; \
+								printf("ah\n");
+						}
+
+					}
+					else {
+						if (d_lines1g[randomIndex + 1] < d_lines1g[randomIndex]) {
+							d_lines1g[randomIndex + 1] = false;
+							printf("ai\n");
+						}
+						else if (d_lines1g[randomIndex + 1] > d_lines1g[randomIndex]) {
+							d_lines1g[randomIndex] = false;
+							printf("ak\n");
+						}
+					}
+					judgePrune(d_lines1g, arrayG1, arrayG1.size());
+					leftBound = d_vertex_x[randomIndex];
+					printf("al\n");
+				}
+			}
+			leftBound = d_vertex_x[randomIndex];
+			judgePrune(d_lines1g, arrayG1, arrayG1.size());
+			printf("am\n");
+			return false;
+		}
+		else if (sg <= 0 && 0 <= Sg) {
+
+			optimalAnswer_x = d_vertex_x[randomIndex];;
+			optimalAnswer_y = d_vertex_y[randomIndex];;
+			printf("%lf %lf\n", optimalAnswer_x, optimalAnswer_y);
+			printf("amn\n");
+			return true;
+		}
+	}
+	printf("optimal answer:%lf %lf \n", optimalAnswer_x, optimalAnswer_y);
+}
+
+
+
+
